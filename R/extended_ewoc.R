@@ -25,6 +25,7 @@
 #'@param last_dose a numerical value for the last allowable dose in the trial.
 #'@param dose_set a numerical vector of allowable doses in the trial. It is only
 #'necessary if type = "discrete".
+#'@param max_increment a numerical value indicating the maximum increment from the current dose to the next dose.
 #'@param rounding a character indicating how to round a continuous dose to the
 #'one of elements of the dose set.
 #'It is only necessary if type = "discrete".
@@ -62,7 +63,7 @@ ewoc_d1extended <- function(formula, theta, alpha,
                             min_dose, max_dose,
                             type = c('continuous', 'discrete'),
                             first_dose = NULL, last_dose = NULL,
-                            dose_set = NULL,
+                            dose_set = NULL, max_increment = NULL,
                             rounding = c("down", "nearest"),
                             n_adapt = 5000, burn_in = 1000,
                             n_mcmc = 1000, n_thin = 1, n_chains = 1) {
@@ -95,6 +96,9 @@ ewoc_d1extended <- function(formula, theta, alpha,
 
     if (length(rounding) > 1 | !(rounding == "down" | rounding == "nearest"))
       stop("'rounding' should be either 'down' or 'nearest'.")
+
+    if (is.null(max_increment))
+      max_increment <- max(diff(dose_set))
   }
 
   if (!(alpha > 0 & alpha < 1))
@@ -111,6 +115,11 @@ ewoc_d1extended <- function(formula, theta, alpha,
                            type = type, rounding = rounding,
                            dose_set = dose_set)
 
+  if (is.null(max_increment))
+    max_increment <- limits$last_dose - limits$first_dose
+
+  current_dose <- design_matrix[nrow(design_matrix), 2]
+
   design_matrix[, 2] <-
     standard_dose(dose = design_matrix[, 2],
                   min_dose = limits$min_dose,
@@ -120,16 +129,13 @@ ewoc_d1extended <- function(formula, theta, alpha,
                   theta = theta, alpha = alpha,
                   limits = limits,
                   dose_set = dose_set,
+                  max_increment = max_increment, current_dose = current_dose,
                   rho_prior = rho_prior,
                   type = type, rounding = rounding)
-  class(my_data) <- "d1extended"
+  class(my_data) <- c("ewoc_d1extended", "d1extended")
 
-  out <- qmtd_jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
-
-  if (type == "discrete")
-    out$next_dose <- rounding_system(dose = out$next_dose,
-                                     grid = dose_set,
-                                     rounding = rounding)
+  my_data$mcmc <- jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
+  out <- next_dose(my_data)
 
   trial <- list(response = response, design_matrix = design_matrix,
                 theta = theta, alpha = alpha,
@@ -147,7 +153,8 @@ ewoc_d1extended <- function(formula, theta, alpha,
   return(out)
 }
 
-ewoc_jags.d1extended <- function(data, n_adapt, burn_in,
+#'@importFrom rjags jags.model coda.samples
+jags.d1extended <- function(data, n_adapt, burn_in,
                                  n_mcmc, n_thin, n_chains) {
 
   min_dose <- data$limits$min_dose
@@ -193,15 +200,15 @@ ewoc_jags.d1extended <- function(data, n_adapt, burn_in,
   }
 
   # Calling JAGS
-  j <- rjags::jags.model(textConnection(jfun),
+  j <- jags.model(textConnection(jfun),
                   data = data_base,
                   inits = list(v = inits()),
                   n.chains = n_chains,
                   n.adapt = n_adapt)
   update(j, burn_in)
-  sample <- rjags::coda.samples(j, variable.names = c("beta", "rho"),
-                                n.iter = n_mcmc, thin = n_thin,
-                                n.chains = n_chains)
+  sample <- coda.samples(j, variable.names = c("beta", "rho"),
+                         n.iter = n_mcmc, thin = n_thin,
+                         n.chains = n_chains)
 
   beta <- sample[[1]][, 1:2]
   rho <- sample[[1]][, 3:4]

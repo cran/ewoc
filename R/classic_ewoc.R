@@ -29,6 +29,7 @@
 #'It is only necessary if type = 'continuous'.
 #'@param dose_set a numerical vector of allowable doses in the trial.
 #'It is only necessary if type = 'discrete'.
+#'@param max_increment a numerical value indicating the maximum increment from the current dose to the next dose.
 #'@param rounding a character indicating how to round a continuous dose to the
 #'one of elements of the dose set. It is only necessary if type = 'discrete'.
 #'@param n_adapt the number of iterations for adaptation.
@@ -50,7 +51,7 @@
 #'
 #'@examples
 #'DLT <- 0
-#'dose <- 30
+#'dose <- 20
 #'test <- ewoc_d1classic(DLT ~ dose, type = 'discrete',
 #'                       theta = 0.33, alpha = 0.25,
 #'                       min_dose = 0, max_dose = 100,
@@ -65,14 +66,14 @@
 #'
 #'@export
 ewoc_d1classic <- function(formula, theta, alpha,
-                         mtd_prior, rho_prior,
-                         min_dose, max_dose,
-                         type = c('continuous', 'discrete'),
-                         first_dose = NULL, last_dose = NULL,
-                         dose_set = NULL,
-                         rounding = c("down", "nearest"),
-                         n_adapt = 5000, burn_in = 1000,
-                         n_mcmc = 1000, n_thin = 1, n_chains = 1) {
+                           mtd_prior, rho_prior,
+                           min_dose, max_dose,
+                           type = c('continuous', 'discrete'),
+                           first_dose = NULL, last_dose = NULL,
+                           dose_set = NULL, max_increment = NULL,
+                           rounding = c("down", "nearest"),
+                           n_adapt = 5000, burn_in = 1000,
+                           n_mcmc = 1000, n_thin = 1, n_chains = 1) {
 
 
   formula <- Formula::Formula(formula)
@@ -102,6 +103,9 @@ ewoc_d1classic <- function(formula, theta, alpha,
 
     if (length(rounding) > 1 | !(rounding == "down" | rounding == "nearest"))
       stop("'rounding' should be either 'down' or 'nearest'.")
+
+    if (is.null(max_increment))
+      max_increment <- max(diff(dose_set))
   }
 
   if (!(alpha > 0 & alpha < 1))
@@ -113,13 +117,18 @@ ewoc_d1classic <- function(formula, theta, alpha,
   if (nrow(mtd_prior) != 1 | ncol(mtd_prior) != 2)
     stop(paste0("'mtd_prior' should be a matrix with 2 columns and 1 row."))
 
-  if (nrow(rho_prior) != 1 | ncol(mtd_prior) != 2)
+  if (nrow(rho_prior) != 1 | ncol(rho_prior) != 2)
     stop(paste0("'rho_prior' should be a matrix with 2 columns and 1 row."))
 
   limits <- limits_d1nocov(first_dose = first_dose, last_dose = last_dose,
                            min_dose = min_dose, max_dose = max_dose,
                            type = type, rounding = rounding,
                            dose_set = dose_set)
+
+  if (is.null(max_increment))
+    max_increment <- limits$last_dose - limits$first_dose
+
+  current_dose <- design_matrix[nrow(design_matrix), 2]
 
   design_matrix[, 2] <-
     standard_dose(dose = design_matrix[, 2],
@@ -129,11 +138,13 @@ ewoc_d1classic <- function(formula, theta, alpha,
   my_data <- list(response = response, design_matrix = design_matrix,
                   theta = theta, alpha = alpha, limits = limits,
                   dose_set = dose_set,
+                  max_increment = max_increment, current_dose = current_dose,
                   rho_prior = rho_prior, mtd_prior = mtd_prior,
                   type = type[1], rounding = rounding)
-  class(my_data) <- "d1classic"
+  class(my_data) <- c("ewoc_d1classic", "d1classic")
 
-  out <- qmtd_jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
+  my_data$mcmc <- jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
+  out <- next_dose(my_data)
 
   design_matrix[, 2] <-
     inv_standard_dose(dose = design_matrix[, 2],
@@ -155,7 +166,8 @@ ewoc_d1classic <- function(formula, theta, alpha,
   return(out)
 }
 
-ewoc_jags.d1classic <- function(data, n_adapt, burn_in,
+#'@importFrom rjags jags.model coda.samples
+jags.d1classic <- function(data, n_adapt, burn_in,
                               n_mcmc, n_thin, n_chains) {
 
   # JAGS model function
@@ -193,15 +205,15 @@ ewoc_jags.d1classic <- function(data, n_adapt, burn_in,
   }
 
   # Calling JAGS
-  j <- rjags::jags.model(textConnection(jfun),
-                         data = data_base,
-                         inits = list(v = inits()),
-                         n.chains = n_chains,
-                         n.adapt = n_adapt)
+  j <- jags.model(textConnection(jfun),
+                  data = data_base,
+                  inits = list(v = inits()),
+                  n.chains = n_chains,
+                  n.adapt = n_adapt)
   update(j, burn_in)
-  sample <- rjags::coda.samples(j, variable.names = c("beta", "gamma", "rho"),
-                                n.iter = n_mcmc, thin = n_thin,
-                                n.chains = n_chains)
+  sample <- coda.samples(j, variable.names = c("beta", "gamma", "rho"),
+                         n.iter = n_mcmc, thin = n_thin,
+                         n.chains = n_chains)
 
   beta <- sample[[1]][, 1:2]
   gamma <- sample[[1]][, 3]

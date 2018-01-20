@@ -35,6 +35,7 @@
 #'It is only necessary if type = 'continuous'.
 #'@param dose_set a numerical vector of allowable doses in the trial. It is only
 #'necessary if type = 'discrete'.
+#'@param max_increment a numerical value indicating the maximum increment from the current dose to the next dose.
 #'@param distribution a character establishing the distribution for the time of
 #'events. It can be 'exponential' or 'weibull'.
 #'@param rounding a character indicating how to round a continuous dose to the
@@ -79,7 +80,7 @@ ewoc_d1ph <- function(formula, theta, alpha, tau,
                       rho_prior, mtd_prior, shape_prior = NULL,
                       min_dose, max_dose,
                       first_dose = NULL, last_dose = NULL,
-                      dose_set = NULL,
+                      dose_set = NULL, max_increment = NULL,
                       distribution = c('exponential', 'weibull'),
                       rounding = c('down', 'nearest'),
                       n_adapt = 5000, burn_in = 1000,
@@ -116,6 +117,9 @@ ewoc_d1ph <- function(formula, theta, alpha, tau,
 
     if (length(rounding) > 1 | !(rounding == "down" | rounding == "nearest"))
       stop("'rounding' should be either 'down' or 'nearest'.")
+
+    if (is.null(max_increment))
+      max_increment <- max(diff(dose_set))
   }
 
   if (!(alpha > 0 & alpha < 1))
@@ -143,6 +147,11 @@ ewoc_d1ph <- function(formula, theta, alpha, tau,
                            type = type, rounding = rounding,
                            dose_set = dose_set)
 
+  if (is.null(max_increment))
+    max_increment <- limits$last_dose - limits$first_dose
+
+  current_dose <- design_matrix[nrow(design_matrix), 2]
+
   design_matrix[, 2] <-
     standard_dose(dose = design_matrix[, 2],
                   min_dose = limits$min_dose,
@@ -152,13 +161,15 @@ ewoc_d1ph <- function(formula, theta, alpha, tau,
                   theta = theta, alpha = alpha,
                   limits = limits,
                   dose_set = dose_set,
+                  max_increment = max_increment, current_dose = current_dose,
                   rho_prior = rho_prior, mtd_prior= mtd_prior,
                   shape_prior = shape_prior,
                   distribution = distribution, tau = tau,
                   type = type, rounding = rounding)
-  class(my_data) <- "d1ph"
+  class(my_data) <- c("ewoc_d1ph", "d1ph")
 
-  out <- qmtd_jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
+  my_data$mcmc <- jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
+  out <- next_dose(my_data)
 
   trial <- list(response = response, design_matrix = design_matrix,
                 theta = theta, alpha = alpha,
@@ -178,7 +189,8 @@ ewoc_d1ph <- function(formula, theta, alpha, tau,
   return(out)
 }
 
-ewoc_jags.d1ph <- function(data, n_adapt, burn_in,
+#'@importFrom rjags jags.model coda.samples
+jags.d1ph <- function(data, n_adapt, burn_in,
                          n_mcmc, n_thin, n_chains) {
 
   time_cens <- data$response[, 1]
@@ -275,19 +287,19 @@ ewoc_jags.d1ph <- function(data, n_adapt, burn_in,
 
   initial <- inits()
   # Calling JAGS
-  j <- rjags::jags.model(textConnection(jfun),
-                         data = data_base,
-                         inits = initial,
-                         n.chains = n_chains,
-                         n.adapt = n_adapt)
+  j <- jags.model(textConnection(jfun),
+                  data = data_base,
+                  inits = initial,
+                  n.chains = n_chains,
+                  n.adapt = n_adapt)
   update(j, burn_in)
 
   if (data$distribution == "weibull"){
-    sample <- rjags::coda.samples(j,
-                                  variable.names =
-                                    c("beta", "gamma", "rho", "shape"),
-                                  n.iter = n_mcmc, thin = n_thin,
-                                  n.chains = n_chains)
+    sample <- coda.samples(j,
+                           variable.names =
+                             c("beta", "gamma", "rho", "shape"),
+                           n.iter = n_mcmc, thin = n_thin,
+                           n.chains = n_chains)
 
     beta <- sample[[1]][, 1:2]
     gamma <- sample[[1]][, 3]
@@ -297,9 +309,9 @@ ewoc_jags.d1ph <- function(data, n_adapt, burn_in,
     out <- list(beta = beta, gamma = gamma, rho = rho, shape = shape,
                 sample = sample)
   } else {
-    sample <- rjags::coda.samples(j, variable.names =  c("beta", "gamma", "rho"),
-                                  n.iter = n_mcmc, thin = n_thin,
-                                  n.chains = n_chains)
+    sample <- coda.samples(j, variable.names =  c("beta", "gamma", "rho"),
+                           n.iter = n_mcmc, thin = n_thin,
+                           n.chains = n_chains)
 
     beta <- sample[[1]][, 1:2]
     gamma <- sample[[1]][, 3]

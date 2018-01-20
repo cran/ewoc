@@ -6,8 +6,9 @@
 \usage{
 ewoc_d1classic(formula, theta, alpha, mtd_prior, rho_prior, min_dose, max_dose,
   type = c("continuous", "discrete"), first_dose = NULL, last_dose = NULL,
-  dose_set = NULL, rounding = c("down", "nearest"), n_adapt = 5000,
-  burn_in = 1000, n_mcmc = 1000, n_thin = 1, n_chains = 1)
+  dose_set = NULL, max_increment = NULL, rounding = c("down", "nearest"),
+  n_adapt = 5000, burn_in = 1000, n_mcmc = 1000, n_thin = 1,
+  n_chains = 1)
 }
 \arguments{
 \item{formula}{an object of class \code{\link[Formula]{Formula}}: a symbolic
@@ -46,6 +47,8 @@ It is only necessary if type = 'continuous'.}
 \item{dose_set}{a numerical vector of allowable doses in the trial.
 It is only necessary if type = 'discrete'.}
 
+\item{max_increment}{a numerical value indicating the maximum increment from the current dose to the next dose.}
+
 \item{rounding}{a character indicating how to round a continuous dose to the
 one of elements of the dose set. It is only necessary if type = 'discrete'.}
 
@@ -78,7 +81,7 @@ classic parametrization for binary responses and single agent.
 }
 \examples{
 DLT <- 0
-dose <- 30
+dose <- 20
 test <- ewoc_d1classic(DLT ~ dose, type = 'discrete',
                       theta = 0.33, alpha = 0.25,
                       min_dose = 0, max_dose = 100,
