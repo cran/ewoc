@@ -106,3 +106,7 @@ feasibility <- function(alpha, strategy, rate, dlt, resolution){
   return(out)
 }
 
+
+
+
+

@@ -2,7 +2,7 @@
 #'
 #'Finding the next dose for a phase I clinical trial based on the
 #'Escalation with Overdose Control (EWOC) design considering the
-#'classic parametrization for binary responses and single agent.
+#'classical parametrization for binary responses and single agent.
 #'
 #'@param formula an object of class \code{\link[Formula]{Formula}}: a symbolic
 #'description of the model to be fitted with only one regressor term
@@ -30,6 +30,9 @@
 #'@param dose_set a numerical vector of allowable doses in the trial.
 #'It is only necessary if type = 'discrete'.
 #'@param max_increment a numerical value indicating the maximum increment from the current dose to the next dose.
+#'It is only applied if type = 'continuous'.
+#'@param no_skip_dose a logical value indicating if it is allowed to skip doses.
+#'It is only necessary if type = 'discrete'. The default is TRUE.
 #'@param rounding a character indicating how to round a continuous dose to the
 #'one of elements of the dose set. It is only necessary if type = 'discrete'.
 #'@param n_adapt the number of iterations for adaptation.
@@ -52,10 +55,10 @@
 #'@examples
 #'DLT <- 0
 #'dose <- 20
-#'test <- ewoc_d1classic(DLT ~ dose, type = 'discrete',
+#'test <- ewoc_d1classical(DLT ~ dose, type = 'discrete',
 #'                       theta = 0.33, alpha = 0.25,
-#'                       min_dose = 0, max_dose = 100,
-#'                       dose_set = seq(0, 100, 20),
+#'                       min_dose = 20, max_dose = 100,
+#'                       dose_set = seq(20, 100, 20),
 #'                       rho_prior = matrix(1, ncol = 2, nrow = 1),
 #'                       mtd_prior = matrix(1, ncol = 2, nrow = 1),
 #'                       rounding = "nearest")
@@ -65,12 +68,13 @@
 #'@import stats
 #'
 #'@export
-ewoc_d1classic <- function(formula, theta, alpha,
+ewoc_d1classical <- function(formula, theta, alpha,
                            mtd_prior, rho_prior,
                            min_dose, max_dose,
                            type = c('continuous', 'discrete'),
                            first_dose = NULL, last_dose = NULL,
-                           dose_set = NULL, max_increment = NULL,
+                           dose_set = NULL,
+                           max_increment = NULL, no_skip_dose = TRUE,
                            rounding = c("down", "nearest"),
                            n_adapt = 5000, burn_in = 1000,
                            n_mcmc = 1000, n_thin = 1, n_chains = 1) {
@@ -103,9 +107,6 @@ ewoc_d1classic <- function(formula, theta, alpha,
 
     if (length(rounding) > 1 | !(rounding == "down" | rounding == "nearest"))
       stop("'rounding' should be either 'down' or 'nearest'.")
-
-    if (is.null(max_increment))
-      max_increment <- max(diff(dose_set))
   }
 
   if (!(alpha > 0 & alpha < 1))
@@ -130,6 +131,15 @@ ewoc_d1classic <- function(formula, theta, alpha,
 
   current_dose <- design_matrix[nrow(design_matrix), 2]
 
+  if (type == "continuous"){
+    if (current_dose < min_dose | current_dose > max_dose)
+      stop("The first patient is receiving a dose outside of the dose boundaries given by
+           'min_dose' and 'max_dose'.")
+  } else {
+    if (!(current_dose %in% dose_set))
+      stop("The first patient is receiving a dose outside of the dose set")
+  }
+
   design_matrix[, 2] <-
     standard_dose(dose = design_matrix[, 2],
                   min_dose = limits$min_dose,
@@ -138,10 +148,12 @@ ewoc_d1classic <- function(formula, theta, alpha,
   my_data <- list(response = response, design_matrix = design_matrix,
                   theta = theta, alpha = alpha, limits = limits,
                   dose_set = dose_set,
-                  max_increment = max_increment, current_dose = current_dose,
+                  max_increment = max_increment,
+                  no_skip_dose = no_skip_dose,
+                  current_dose = current_dose,
                   rho_prior = rho_prior, mtd_prior = mtd_prior,
                   type = type[1], rounding = rounding)
-  class(my_data) <- c("ewoc_d1classic", "d1classic")
+  class(my_data) <- c("ewoc_d1classical", "d1classical")
 
   my_data$mcmc <- jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
   out <- next_dose(my_data)
@@ -156,18 +168,20 @@ ewoc_d1classic <- function(formula, theta, alpha,
                 first_dose = limits$first_dose, last_dose = limits$last_dose,
                 min_dose = limits$min_dose, max_dose = limits$max_dose,
                 dose_set = dose_set,
+                max_increment = max_increment,
+                no_skip_dose = no_skip_dose,
                 rho_prior = rho_prior, mtd_prior = mtd_prior,
                 type = type, rounding = rounding,
                 n_adapt = n_adapt, burn_in = burn_in, n_mcmc = n_mcmc,
                 n_thin = n_thin, n_chains = n_chains)
   out$trial <- trial
 
-  class(out) <- c("ewoc_d1classic", "d1classic")
+  class(out) <- c("ewoc_d1classical", "d1classical")
   return(out)
 }
 
 #'@importFrom rjags jags.model coda.samples
-jags.d1classic <- function(data, n_adapt, burn_in,
+jags.d1classical <- function(data, n_adapt, burn_in,
                               n_mcmc, n_thin, n_chains) {
 
   # JAGS model function
@@ -179,7 +193,7 @@ jags.d1classic <- function(data, n_adapt, burn_in,
       lp[i] <- inprod(design_matrix[i, ], beta)
     }
 
-    beta[1] <-logit(rho)
+    beta[1] <- logit(rho)
     beta[2] <- (logit(theta) - logit(rho))/gamma
 
     rho <- theta*v[1]
@@ -222,5 +236,4 @@ jags.d1classic <- function(data, n_adapt, burn_in,
 
   return(out)
 }
-
 

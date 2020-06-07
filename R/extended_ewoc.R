@@ -26,6 +26,9 @@
 #'@param dose_set a numerical vector of allowable doses in the trial. It is only
 #'necessary if type = "discrete".
 #'@param max_increment a numerical value indicating the maximum increment from the current dose to the next dose.
+#'It is only applied if type = 'continuous'.
+#'@param no_skip_dose a logical value indicating if it is allowed to skip doses.
+#'It is only necessary if type = 'discrete'. The default is TRUE.
 #'@param rounding a character indicating how to round a continuous dose to the
 #'one of elements of the dose set.
 #'It is only necessary if type = "discrete".
@@ -42,13 +45,15 @@
 #'@return \code{sample} a list of the MCMC chains distribution.
 #'@return \code{trial} a list of the trial conditions.
 #'
+#'@references Tighiouart, M., Cook-Wiens, G., & Rogatko, A. (2018). A Bayesian adaptive design for cancer phase I trials using a flexible range of doses. Journal of biopharmaceutical statistics, 28(3), 562-574.
+#'
 #'@examples
 #'DLT <- 0
-#'dose <- 30
+#'dose <- 20
 #'
 #'test <- ewoc_d1extended(DLT ~ dose, type = 'discrete',
 #'                        theta = 0.33, alpha = 0.25,
-#'                        dose_set = c(30, 40, 50),
+#'                        dose_set = seq(20, 100, 20),
 #'                        min_dose = 20, max_dose = 100,
 #'                        rho_prior = matrix(1, ncol = 2, nrow = 2),
 #'                        rounding = "nearest")
@@ -63,7 +68,8 @@ ewoc_d1extended <- function(formula, theta, alpha,
                             min_dose, max_dose,
                             type = c('continuous', 'discrete'),
                             first_dose = NULL, last_dose = NULL,
-                            dose_set = NULL, max_increment = NULL,
+                            dose_set = NULL,
+                            max_increment = NULL, no_skip_dose = TRUE,
                             rounding = c("down", "nearest"),
                             n_adapt = 5000, burn_in = 1000,
                             n_mcmc = 1000, n_thin = 1, n_chains = 1) {
@@ -96,9 +102,6 @@ ewoc_d1extended <- function(formula, theta, alpha,
 
     if (length(rounding) > 1 | !(rounding == "down" | rounding == "nearest"))
       stop("'rounding' should be either 'down' or 'nearest'.")
-
-    if (is.null(max_increment))
-      max_increment <- max(diff(dose_set))
   }
 
   if (!(alpha > 0 & alpha < 1))
@@ -120,6 +123,15 @@ ewoc_d1extended <- function(formula, theta, alpha,
 
   current_dose <- design_matrix[nrow(design_matrix), 2]
 
+  if (type == "continuous"){
+    if (current_dose < min_dose | current_dose > max_dose)
+      stop("The first patient is receiving a dose outside of the dose boundaries given by
+           'min_dose' and 'max_dose'.")
+  } else {
+    if (!(current_dose %in% dose_set))
+      stop("The first patient is receiving a dose outside of the dose set")
+  }
+
   design_matrix[, 2] <-
     standard_dose(dose = design_matrix[, 2],
                   min_dose = limits$min_dose,
@@ -129,7 +141,9 @@ ewoc_d1extended <- function(formula, theta, alpha,
                   theta = theta, alpha = alpha,
                   limits = limits,
                   dose_set = dose_set,
-                  max_increment = max_increment, current_dose = current_dose,
+                  max_increment = max_increment,
+                  no_skip_dose = no_skip_dose,
+                  current_dose = current_dose,
                   rho_prior = rho_prior,
                   type = type, rounding = rounding)
   class(my_data) <- c("ewoc_d1extended", "d1extended")
@@ -137,11 +151,18 @@ ewoc_d1extended <- function(formula, theta, alpha,
   my_data$mcmc <- jags(my_data, n_adapt, burn_in, n_mcmc, n_thin, n_chains)
   out <- next_dose(my_data)
 
+  design_matrix[, 2] <-
+    inv_standard_dose(dose = design_matrix[, 2],
+                      min_dose = limits$min_dose,
+                      max_dose = limits$max_dose)
+
   trial <- list(response = response, design_matrix = design_matrix,
                 theta = theta, alpha = alpha,
                 first_dose = limits$first_dose, last_dose = limits$last_dose,
                 min_dose = limits$min_dose, max_dose = limits$max_dose,
                 dose_set = dose_set,
+                max_increment = max_increment,
+                no_skip_dose = no_skip_dose,
                 rho_prior = rho_prior,
                 type = type, rounding = rounding,
                 n_adapt = n_adapt, burn_in = burn_in, n_mcmc = n_mcmc,
@@ -217,6 +238,55 @@ jags.d1extended <- function(data, n_adapt, burn_in,
 
   return(out)
 }
+
+
+#'Convert mtd to rho_1 and vice-versa
+#'
+#'Converting mtd to rho_1 given rho_0 for EWOC design using extended parametrization
+#'and vice-versa.
+#'
+#'@param mtd a numerical value defining the mtd value to be converted into rho_1 value.
+#'@param rho_1 a numerical value defining the  probability of DLT at the max_dose.
+#'@param rho_0 a numerical value defining the  probability of DLT at the min_dose.
+#'@param theta a numerical value defining the proportion of expected patients
+#'to experience a medically unacceptable, dose-limiting toxicity (DLT) if
+#'administered the MTD.
+#'@param min_dose a numerical value defining the lower bound of the support of
+#'the MTD.
+#'@param max_dose a numerical value defining the upper bound of the support of
+#'the MTD.
+#'
+#'@return \code{mtd} a numerical value for the maximum tolerable dose.
+#'@return \code{rho_1} a numerical value for the probability of DLT at the max_dose.
+#'
+#'@export
+mtd_rho_d1extended <- function(mtd = NULL, rho_1 = NULL, rho_0,
+                               theta, min_dose, max_dose){
+
+  if (is.null(mtd) & is.null(rho_1)) {
+    stop("At least one between 'mtd' or 'rho_1' should be defined.")
+
+  } else {
+
+    if (is.null(mtd)){
+      gamma <- (logit(theta) - logit(rho_0))/(logit(rho_1) - logit(rho_0))
+      mtd <- inv_standard_dose(gamma, min_dose = min_dose, max_dose = max_dose)
+
+      out <- list(mtd = mtd, rho_1 = rho_1)
+    }
+
+    if (is.null(rho_1)){
+      gamma <- standard_dose(mtd, min_dose = min_dose, max_dose = max_dose)
+
+      rho_1 <- plogis((logit(theta) - (1+ gamma)*logit(rho_0))/gamma)
+
+      out <- list(mtd = mtd, rho_1 = rho_1)
+    }
+  }
+
+  return(out)
+}
+
 
 
 

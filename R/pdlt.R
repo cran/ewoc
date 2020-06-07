@@ -1,4 +1,4 @@
-#'Generating a probability of DLT function based on the EWOC classic model
+#'Generating a probability of DLT function based on the EWOC classical model
 #
 #'@param rho a numerical value indicating the true value of the parameter rho.
 #'@param mtd a numerical value indicating the true value of the parameter mtd.
@@ -14,14 +14,14 @@
 #'logistic regression and parameters as an output.
 #'
 #'@examples
-#'pdlt <- pdlt_d1classic(rho = 0.05, mtd = 20, theta = 0.33,
-#'                       min_dose = 10, max_dose = 50)
+#'pdlt <- pdlt_d1classical(rho = 0.05, mtd = 60, theta = 0.33,
+#'                       min_dose = 20, max_dose = 100)
 #'
 #'pdlt(20)
 #'
 #'
 #'@export
-pdlt_d1classic <- function(rho, mtd, theta, min_dose, max_dose){
+pdlt_d1classical <- function(rho, mtd, theta, min_dose, max_dose){
 
   gamma <- standard_dose(dose = mtd,
                          min_dose = min_dose,
@@ -99,7 +99,7 @@ pdlt_d1extended <- function(rho, min_dose, max_dose){
 #'@param tau a numerical value defining the period of time for a possible
 #'toxicity be observed.
 #'@param distribution a character establishing the distribution for the time of
-#'events.
+#'events. It can be defined as 'exponential' or 'weibull'.
 #'@param shape a numerical value indicating the true value of the parameter shape.
 #'It is only necessary if 'distribution' = "weibull".
 #'
